@@ -35,7 +35,15 @@ namespace KeyCodeReceiver
                 var keysList = new List<Keys>();
                 foreach (string str in keyStrList)
                 {
-                    keysList.Add(toKeyCodeMap[str]);
+                    try
+                    {
+                        Console.WriteLine(str);
+                        keysList.Add(toKeyCodeMap[str]);
+                    }
+                    catch (Exception e)
+                    {
+                        Console.WriteLine(e.ToString());
+                    }
                 }
 
                 keysList.Sort((a, b) =>
