@@ -19,7 +19,7 @@ namespace KeyCodeReceiver
             InitKeyCodeMap();
         }
 
-        public void InputKeys(List<String> keyStrList)
+        public void InputKeys(string[] keyStrList)
         {
             Task.Run(() =>
             {
@@ -48,6 +48,7 @@ namespace KeyCodeReceiver
 
                 keysList.Sort((a, b) =>
                 {
+                    //Winキーを一番小さくする
                     if (a == Keys.LWin)
                     {
                         if (b == Keys.LWin)
@@ -61,6 +62,7 @@ namespace KeyCodeReceiver
                         return 1;
                     }
 
+                    //Tabキーを二番目に小さくする
                     if (a == Keys.Tab)
                     {
                         if (b == Keys.Tab)
