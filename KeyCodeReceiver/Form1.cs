@@ -34,7 +34,7 @@ namespace KeyCodeReceiver
             keyReceiver = new KeyReceiver(this);
 
             settings = Settings.Instance;
-   
+
             portTextBox.Text = settings.Port.ToString();
 
             if (String.IsNullOrWhiteSpace(settings.Pw))
@@ -44,6 +44,21 @@ namespace KeyCodeReceiver
             else
             {
                 pwTextBox.Text = KeyContainerManager.Decrypt(settings.Pw, "KeyReceiver");
+            }
+
+            minimizeToTrayCheck.Checked = settings.MinimizeToTrayCheck;
+            autoRunCheck.Checked = settings.AutoRunCheck;
+            runOnTrayCheck.Checked = settings.RunOnTrayCheck;
+
+            if (runOnTrayCheck.Checked)
+            {
+                this.WindowState = FormWindowState.Minimized;
+                this.ShowInTaskbar = false;
+                runBtn_Click(sender, e);
+            }
+            else
+            {
+                notifyIcon1.Visible = false;
             }
 
             //ログ出力用TextBoxをReadOnlyにしたときの背景色が灰色にならないようにする
@@ -77,17 +92,85 @@ namespace KeyCodeReceiver
             {
                 settings.Pw = KeyContainerManager.Encrypt(pwTextBox.Text, KeyContainerManager.CreateKeys("KeyReceiver"));
             }
+            settings.MinimizeToTrayCheck = minimizeToTrayCheck.Checked;
+            settings.AutoRunCheck = autoRunCheck.Checked;
+            if (settings.AutoRunCheck)
+            {
+                using (var regkey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true))
+                {
+                    regkey.SetValue(Application.ProductName, Application.ExecutablePath);
+                }
+            }
+            else
+            {
+                using (var regkey = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true))
+                {
+                    regkey.DeleteValue(Application.ProductName, false);
+                }
+            }
+            settings.RunOnTrayCheck = runOnTrayCheck.Checked;
             settings.Save();
         }
 
         private void WriteLog(string text)
         {
             logTextBox.AppendText(DateTime.Now + " " + text + "\r\n");
+
+            var maxLine = 1000;
+            if (logTextBox.Lines.Length > maxLine)
+            {
+                var newLines = new string[maxLine];
+                Array.Copy(logTextBox.Lines, 1, newLines, 0, maxLine);
+                logTextBox.Lines = newLines;
+            }
+
+            logTextBox.SelectionStart = logTextBox.Text.Length;
+            logTextBox.ScrollToCaret();
         }
 
         private void UpdateRunButtonText(string text)
         {
             runBtn.Text = text;
+        }
+
+        private void 閉じるToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            notifyIcon1.Visible = false;
+            Application.Exit();
+        }
+
+        private void notifyIcon1_MouseDoubleClick(object sender, MouseEventArgs e)
+        {
+            notifyIcon1.Visible = false;
+            this.Visible = true;
+            if (this.WindowState == FormWindowState.Minimized)
+            {
+                this.WindowState = FormWindowState.Normal;
+                this.ShowInTaskbar = true;
+            }
+            this.Activate();
+        }
+
+        private void Form1_ClientSizeChanged(object sender, EventArgs e)
+        {
+            if (this.WindowState == FormWindowState.Minimized && minimizeToTrayCheck.Checked)
+            {
+                // フォームが最小化の状態であればフォームを非表示にする
+                this.Hide();
+                notifyIcon1.Visible = true;
+            }
+        }
+
+        private void 開くToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            notifyIcon1.Visible = false;
+            this.Visible = true;
+            if (this.WindowState == FormWindowState.Minimized)
+            {
+                this.WindowState = FormWindowState.Normal;
+                this.ShowInTaskbar = true;
+            }
+            this.Activate();
         }
     }
 }

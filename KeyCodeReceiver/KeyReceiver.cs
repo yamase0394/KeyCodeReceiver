@@ -1,10 +1,7 @@
-﻿
-using Org.BouncyCastle.Asn1.X9;
-using Org.BouncyCastle.Crypto;
+﻿using Org.BouncyCastle.Crypto;
 using Org.BouncyCastle.Crypto.Digests;
 using Org.BouncyCastle.Crypto.Generators;
 using Org.BouncyCastle.Crypto.Parameters;
-using Org.BouncyCastle.Math;
 using Org.BouncyCastle.Security;
 using Org.BouncyCastle.X509;
 using System;
@@ -12,11 +9,9 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
-using System.Security;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
-using System.Xml;
 
 namespace KeyCodeReceiver
 {
@@ -29,6 +24,7 @@ namespace KeyCodeReceiver
         private string pw;
         private Form1 mainThreadForm;
         private bool isRunning;
+        private long preReceiveTime;
 
         public KeyReceiver(Form1 mainThreadForm)
         {
@@ -82,7 +78,19 @@ namespace KeyCodeReceiver
                             plain = Encoding.UTF8.GetString(Decrypt(iv, encrypted));
                         }
 
-                        var keyCodes = plain.Split(new string[] { "," }, StringSplitOptions.RemoveEmptyEntries);
+                        var timeAndKeyCodes = plain.Split(new string[] { "\r\n" }, StringSplitOptions.None);
+                        var time = long.Parse(timeAndKeyCodes[0]);
+                        if(preReceiveTime != long.MaxValue && time > preReceiveTime)
+                        {
+                            preReceiveTime = time;
+                        }
+                        else
+                        {
+                            Console.WriteLine("replay attack? from " + remoteEP.Address);
+                            Stop();
+                        }
+
+                        var keyCodes = timeAndKeyCodes[1].Split(new string[] { "," }, StringSplitOptions.RemoveEmptyEntries);
                         keyboarder.InputKeys(keyCodes);
                         var log = keyCodes[0];
                         foreach (int i in Enumerable.Range(1, keyCodes.Length - 1))
@@ -96,7 +104,6 @@ namespace KeyCodeReceiver
                 {
                     if (isRunning)
                     {
-                        mainThreadForm.Invoke(mainThreadForm.updateRunButtonTextDelegate, "起動");
                         mainThreadForm.Invoke(mainThreadForm.writeLogDelegate, "エラー発生");
                         Console.WriteLine(e.ToString());
                         Stop();
@@ -112,6 +119,7 @@ namespace KeyCodeReceiver
                 mainThreadForm.Invoke(mainThreadForm.updateRunButtonTextDelegate, "起動");
                 isRunning = false;
                 server.Close();
+                sessionKey = null;
                 mainThreadForm.Invoke(mainThreadForm.writeLogDelegate, "サーバ停止");
             }
         }
@@ -136,72 +144,64 @@ namespace KeyCodeReceiver
         {
             Console.WriteLine("start exchanging key");
 
-            var rsa = new RSACryptoServiceProvider(2048);
-            var xml = new XmlDocument();
-            xml.LoadXml(rsa.ToXmlString(false));
-            var base64Modulus = xml.GetElementsByTagName("Modulus")[0].InnerText;
-            Console.WriteLine("RSApub:" +  base64Modulus);
-            var base64Exponent = xml.GetElementsByTagName("Exponent")[0].InnerText;
-            
+            var ecKeyGen = new ECKeyPairGenerator();
+            var keyGenParam = new KeyGenerationParameters(new SecureRandom(), 256);
+            ecKeyGen.Init(keyGenParam);
+            var keyPair = ecKeyGen.GenerateKeyPair();
+
             using (var tcpClient = new TcpClient(remoteIp, port))
             using (var netStream = tcpClient.GetStream())
             using (var reader = new StreamReader(netStream))
             using (var writer = new StreamWriter(netStream))
             {
-                writer.WriteLine("connect");
-                writer.WriteLine(base64Modulus);
-                writer.WriteLine(base64Exponent);
+                //ECDH鍵共有
+                //公開情報を送信
+                writer.WriteLine(Convert.ToBase64String(SubjectPublicKeyInfoFactory.CreateSubjectPublicKeyInfo(keyPair.Public).GetEncoded(), Base64FormattingOptions.None));
                 writer.Flush();
 
-                var msg = Encoding.UTF8.GetString(rsa.Decrypt(Convert.FromBase64String(reader.ReadLine()), false));
-                if (msg != "ok")
-                {
-                    mainThreadForm.Invoke(mainThreadForm.writeLogDelegate, "異常なメッセージ：" + msg);
-                    Stop();
-                    return;
-                }
-            }
+                //公開情報を受信
+                var kotlinPubKey = (ECPublicKeyParameters)PublicKeyFactory.CreateKey(Convert.FromBase64String(reader.ReadLine()));
 
-            var ipEndPoint = new IPEndPoint(IPAddress.Parse(ip), port);
-            var tcpListener = new TcpListener(ipEndPoint);
-            try
-            {
-                tcpListener.Start();
+                //共通鍵を生成
+                var keyAgree = AgreementUtilities.GetBasicAgreement("ECDH");
+                keyAgree.Init(keyPair.Private);
+                var sharedSecret = keyAgree.CalculateAgreement(kotlinPubKey);
+                var dhSecKey = sharedSecret.ToByteArrayUnsigned();
 
                 var gen = new Pkcs5S2ParametersGenerator(new Sha256Digest());
                 gen.Init(Encoding.UTF8.GetBytes(pw), Encoding.UTF8.GetBytes("終末なにしてますか?忙しいですか?救ってもらっていいですか?"), 4096);
                 byte[] secretKey = ((KeyParameter)gen.GenerateDerivedParameters(256)).GetKey();
 
-                using (var tcpClient = tcpListener.AcceptTcpClient())
-                using (var netStream = tcpClient.GetStream())
-                using (var streamReader = new StreamReader(netStream, Encoding.UTF8))
-                using (var writer = new StreamWriter(netStream))
+                var ivAndEncrypted = reader.ReadLine();
+                var splitted = ivAndEncrypted.Split(new string[] { "?" }, StringSplitOptions.None);
+                var iv = Convert.FromBase64String(splitted[0]);
+                var encrypted = Convert.FromBase64String(splitted[1]);
+
+                ivAndEncrypted = Encoding.UTF8.GetString(Decrypt(iv, encrypted, dhSecKey));
+                splitted = ivAndEncrypted.Split(new string[] { "?" }, StringSplitOptions.None);
+                iv = Convert.FromBase64String(splitted[0]);
+                var encryptedSessionKey = Convert.FromBase64String(splitted[1]);
+
+                try
                 {
-                    var encrypted = Convert.FromBase64String(streamReader.ReadLine());
-
-                    var values = Encoding.UTF8.GetString(rsa.Decrypt(encrypted, false));
-                    var splitted = values.Split(new string[] { "?" }, StringSplitOptions.None);
-                    var iv = Convert.FromBase64String(splitted[0]);
-                    var encryptedSessionKey = Convert.FromBase64String(splitted[1]);
-
-                    try
-                    {
-                        sessionKey = Decrypt(iv, encryptedSessionKey, secretKey);
-                        writer.WriteLine(Encrypt("ok"));
-                        Console.WriteLine("succeeded in exchanging key");
-                    }
-                    catch (CryptographicException)
-                    {
-                        writer.WriteLine("e1");
-                        mainThreadForm.Invoke(mainThreadForm.writeLogDelegate, "パスワードが一致していません");
-                        Stop();
-                    }
-                    writer.Flush();
+                    sessionKey = Decrypt(iv, encryptedSessionKey, secretKey);
+                    writer.WriteLine(Encrypt("ok"));
+                    Console.WriteLine("succeeded in exchanging key");
                 }
-            }
-            finally
-            {
-                tcpListener.Stop();
+                catch (CryptographicException)
+                {
+                    writer.WriteLine("e1");
+                    mainThreadForm.Invoke(mainThreadForm.writeLogDelegate, "パスワードが一致していません");
+                    Stop();
+                }
+                writer.Flush();
+
+                splitted = reader.ReadLine().Split(new string[] { "?" }, StringSplitOptions.None);
+                iv = Convert.FromBase64String(splitted[0]);
+                encrypted = Convert.FromBase64String(splitted[1]);
+                var clientName = Encoding.UTF8.GetString(Decrypt(iv, encrypted));
+
+                mainThreadForm.Invoke(mainThreadForm.writeLogDelegate, clientName + "が接続しました");
             }
         }
 
@@ -228,7 +228,6 @@ namespace KeyCodeReceiver
                 return Convert.ToBase64String(aes.IV, Base64FormattingOptions.None) + "?" + Convert.ToBase64String(dest, Base64FormattingOptions.None);
             }
         }
-
 
         private byte[] Decrypt(byte[] iv, byte[] encrypted)
         {

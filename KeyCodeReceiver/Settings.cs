@@ -34,6 +34,9 @@ namespace KeyCodeReceiver
             }
         }
         public string Pw { get; set; }
+        public bool MinimizeToTrayCheck { get; set; }
+        public bool AutoRunCheck { get; set; }
+        public bool RunOnTrayCheck { get; set; }
 
         private Settings()
         {
