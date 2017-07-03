@@ -80,7 +80,7 @@ namespace KeyCodeReceiver
 
                         var timeAndKeyCodes = plain.Split(new string[] { "\r\n" }, StringSplitOptions.None);
                         var time = long.Parse(timeAndKeyCodes[0]);
-                        if(preReceiveTime != long.MaxValue && time > preReceiveTime)
+                        if (preReceiveTime != long.MaxValue && time > preReceiveTime)
                         {
                             preReceiveTime = time;
                         }
@@ -144,6 +144,7 @@ namespace KeyCodeReceiver
         {
             Console.WriteLine("start exchanging key");
 
+            //ECDH鍵共有のための鍵ペアを生成
             var ecKeyGen = new ECKeyPairGenerator();
             var keyGenParam = new KeyGenerationParameters(new SecureRandom(), 256);
             ecKeyGen.Init(keyGenParam);
@@ -154,7 +155,6 @@ namespace KeyCodeReceiver
             using (var reader = new StreamReader(netStream))
             using (var writer = new StreamWriter(netStream))
             {
-                //ECDH鍵共有
                 //公開情報を送信
                 writer.WriteLine(Convert.ToBase64String(SubjectPublicKeyInfoFactory.CreateSubjectPublicKeyInfo(keyPair.Public).GetEncoded(), Base64FormattingOptions.None));
                 writer.Flush();
@@ -169,22 +169,16 @@ namespace KeyCodeReceiver
                 var dhSecKey = sharedSecret.ToByteArrayUnsigned();
 
                 var gen = new Pkcs5S2ParametersGenerator(new Sha256Digest());
-                gen.Init(Encoding.UTF8.GetBytes(pw), Encoding.UTF8.GetBytes("終末なにしてますか?忙しいですか?救ってもらっていいですか?"), 4096);
+                gen.Init(Encoding.UTF8.GetBytes(pw), dhSecKey, 4096);
                 byte[] secretKey = ((KeyParameter)gen.GenerateDerivedParameters(256)).GetKey();
 
-                var ivAndEncrypted = reader.ReadLine();
-                var splitted = ivAndEncrypted.Split(new string[] { "?" }, StringSplitOptions.None);
+                var splitted = reader.ReadLine().Split(new string[] { "?" }, StringSplitOptions.None);
                 var iv = Convert.FromBase64String(splitted[0]);
                 var encrypted = Convert.FromBase64String(splitted[1]);
 
-                ivAndEncrypted = Encoding.UTF8.GetString(Decrypt(iv, encrypted, dhSecKey));
-                splitted = ivAndEncrypted.Split(new string[] { "?" }, StringSplitOptions.None);
-                iv = Convert.FromBase64String(splitted[0]);
-                var encryptedSessionKey = Convert.FromBase64String(splitted[1]);
-
                 try
                 {
-                    sessionKey = Decrypt(iv, encryptedSessionKey, secretKey);
+                    sessionKey = Decrypt(iv, encrypted, secretKey);
                     writer.WriteLine(Encrypt("ok"));
                     Console.WriteLine("succeeded in exchanging key");
                 }
@@ -200,7 +194,6 @@ namespace KeyCodeReceiver
                 iv = Convert.FromBase64String(splitted[0]);
                 encrypted = Convert.FromBase64String(splitted[1]);
                 var clientName = Encoding.UTF8.GetString(Decrypt(iv, encrypted));
-
                 mainThreadForm.Invoke(mainThreadForm.writeLogDelegate, clientName + "が接続しました");
             }
         }
